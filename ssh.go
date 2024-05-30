@@ -21,8 +21,8 @@ func init() {
 
 // Handler implements an HTTP handler that proxies connections to a ssh server.
 type Handler struct {
-	// Optional secret path to restrict clients to.
-	Secret string `json:"secret,omitempty"`
+	// Optional addr for SSH server. Defaults to 127.0.0.1:22.
+	Addr string `json:"addr,omitempty"`
 }
 
 // CaddyModule returns the Caddy module information.
@@ -60,7 +60,11 @@ func (h *Handler) ssh(w http.ResponseWriter, _ *http.Request) error {
 	if err := buf.Flush(); err != nil {
 		return fmt.Errorf("ssh: unexpected flush error: %w", err)
 	}
-	sshConn, err := net.Dial("tcp", "127.0.0.1:22")
+	addr := h.Addr
+	if addr == "" {
+		addr = "127.0.0.1:22"
+	}
+	sshConn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("ssh: %w", err)
 	}
@@ -133,7 +137,7 @@ func (h *Handler) ssh(w http.ResponseWriter, _ *http.Request) error {
 
 // ServeHTTP implements caddyhttp.MiddlewareHandler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
-	if h.Secret != "" && r.URL.Path[1:] != h.Secret {
+	if r.Header.Get("X-Caddy-SSH") != "1" { // need our special header
 		return next.ServeHTTP(w, r)
 	}
 	return h.ssh(w, r)
@@ -149,7 +153,7 @@ func (h *Handler) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	}
 
 	// store the argument
-	h.Secret = d.Val()
+	h.Addr = d.Val()
 	return nil
 }
 

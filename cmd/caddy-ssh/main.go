@@ -65,7 +65,7 @@ func run(ctx context.Context, url string) error {
 	b.WriteString(u.RequestURI())
 	b.WriteString(" HTTP/1.1\r\nHost: ")
 	b.WriteString(u.Hostname())
-	b.WriteString("\r\n\r\n")
+	b.WriteString("\r\nX-Caddy-SSH: 1\r\n\r\n")
 	if _, err := conn.Write(b.Bytes()); err != nil {
 		return err
 	}
