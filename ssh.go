@@ -47,7 +47,7 @@ func closeRead(c net.Conn) error {
 	return nil
 }
 
-func (m *Handler) acceptProxy(w http.ResponseWriter, r *http.Request) error {
+func (h *Handler) ssh(w http.ResponseWriter, _ *http.Request) error {
 	rc := http.NewResponseController(w)
 	if err := rc.EnableFullDuplex(); err != nil {
 		return fmt.Errorf("ssh: must connect using HTTP/1.1: %w", err)
@@ -132,28 +132,24 @@ func (m *Handler) acceptProxy(w http.ResponseWriter, r *http.Request) error {
 }
 
 // ServeHTTP implements caddyhttp.MiddlewareHandler.
-func (m *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
-	if r.URL.Path[1:] == m.Secret {
-		return m.acceptProxy(w, r)
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
+	if h.Secret != "" && r.URL.Path[1:] != h.Secret {
+		return next.ServeHTTP(w, r)
 	}
-	if handler, ok := m.handler.Load().(*handler); ok {
-		handler.proxy.ServeHTTP(w, r)
-		return nil
-	}
-	return next.ServeHTTP(w, r)
+	return h.ssh(w, r)
 }
 
 // UnmarshalCaddyfile implements caddyfile.Unmarshaler.
-func (m *Handler) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
+func (h *Handler) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	d.Next() // consume directive name
 
-	// require an argument
+	// if no argument, we're done
 	if !d.NextArg() {
-		return d.ArgErr()
+		return nil
 	}
 
 	// store the argument
-	m.Secret = d.Val()
+	h.Secret = d.Val()
 	return nil
 }
 
