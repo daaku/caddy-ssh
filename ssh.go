@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sync"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
@@ -32,6 +33,20 @@ func (*Handler) CaddyModule() caddy.ModuleInfo {
 	}
 }
 
+func closeWrite(c net.Conn) error {
+	if cw, ok := c.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return nil
+}
+
+func closeRead(c net.Conn) error {
+	if cw, ok := c.(interface{ CloseRead() error }); ok {
+		return cw.CloseRead()
+	}
+	return nil
+}
+
 func (m *Handler) acceptProxy(w http.ResponseWriter, r *http.Request) error {
 	rc := http.NewResponseController(w)
 	if err := rc.EnableFullDuplex(); err != nil {
@@ -54,28 +69,65 @@ func (m *Handler) acceptProxy(w http.ResponseWriter, r *http.Request) error {
 	var eg errgroup.Group
 	eg.Add(2)
 
+	close := func() {
+		if err := httpConn.Close(); err != nil {
+			eg.Error(fmt.Errorf("ssh: closing http connection: %w", err))
+		}
+		if err := sshConn.Close(); err != nil {
+			eg.Error(fmt.Errorf("ssh: closing ssh connection: %w", err))
+		}
+	}
+	var closeOnce sync.Once
+
 	go func() {
 		defer eg.Done()
 		if buf.Reader.Buffered() > 0 {
 			if _, err := io.Copy(sshConn, buf.Reader); err != nil {
-				eg.Error(err)
+				eg.Error(fmt.Errorf("ssh: copying buffered data to ssh from http: %w", err))
+				closeOnce.Do(close)
+				return
 			}
 		}
 		if _, err := io.Copy(sshConn, httpConn); err != nil {
-			eg.Error(err)
+			eg.Error(fmt.Errorf("ssh: copying data to ssh from http: %w", err))
+			closeOnce.Do(close)
+			return
 		}
-		// Signal peer that no more data is coming.
-		sshConn.CloseWrite()
+		if err := closeWrite(sshConn); err != nil {
+			eg.Error(fmt.Errorf("ssh: CloseWrite of ssh: %w", err))
+			closeOnce.Do(close)
+			return
+		}
+		if err := closeRead(httpConn); err != nil {
+			eg.Error(fmt.Errorf("ssh: CloseRead of http: %w", err))
+			closeOnce.Do(close)
+			return
+		}
 	}()
 	go func() {
 		defer eg.Done()
 		if _, err := io.Copy(httpConn, sshConn); err != nil {
-			eg.Error(err)
+			eg.Error(fmt.Errorf("ssh: copying data to http from ssh: %w", err))
+			closeOnce.Do(close)
+			return
 		}
-		// Signal peer that no more data is coming.
-		httpConn.CloseWrite()
+		if err := closeWrite(httpConn); err != nil {
+			eg.Error(fmt.Errorf("ssh: CloseWrite of http: %w", err))
+			closeOnce.Do(close)
+			return
+		}
+		if err := closeRead(sshConn); err != nil {
+			eg.Error(fmt.Errorf("ssh: CloseRead of ssh: %w", err))
+			closeOnce.Do(close)
+			return
+		}
 	}()
 
+	if err := eg.Wait(); err != nil {
+		return err
+	}
+	closeOnce.Do(close)
+	// we wait twice because close may also write an error to the errgroup
 	return eg.Wait()
 }
 
