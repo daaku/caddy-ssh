@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -30,7 +31,7 @@ func closeRead(c net.Conn) error {
 	return nil
 }
 
-func run(ctx context.Context, url string) error {
+func run(ctx context.Context, insecure bool, url string) error {
 	ctx, cancel := context.WithCancel(ctx)
 
 	// this will ensure our background goroutine below will be released if our
@@ -47,7 +48,10 @@ func run(ctx context.Context, url string) error {
 		if u.Port() == "" {
 			addr += ":443"
 		}
-		dialer := tls.Dialer{Config: &tls.Config{ServerName: u.Hostname()}}
+		dialer := tls.Dialer{Config: &tls.Config{
+			ServerName:         u.Hostname(),
+			InsecureSkipVerify: insecure,
+		}}
 		conn, err = dialer.DialContext(ctx, "tcp", addr)
 	} else {
 		if u.Port() == "" {
@@ -130,9 +134,12 @@ func run(ctx context.Context, url string) error {
 }
 
 func main() {
+	insecure := flag.Bool("k", false, "skip verifying TLS certificate")
+	flag.Parse()
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	if err := run(ctx, os.Args[1]); err != nil {
+	if err := run(ctx, *insecure, flag.Arg(0)); err != nil {
 		fmt.Fprintf(os.Stderr, "%+v\n", err)
 		os.Exit(1)
 	}
