@@ -1,0 +1,10 @@
+{
+	admin off
+	auto_https disable_redirects
+	order client_proxy before respond
+}
+
+localhost:4430 {
+	tls internal
+	client_proxy this_is_the_secret_path
+}

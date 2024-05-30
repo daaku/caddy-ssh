@@ -1,0 +1,119 @@
+package ssh
+
+import (
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+
+	"github.com/caddyserver/caddy/v2"
+	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
+	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
+	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
+	"github.com/daaku/errgroup"
+)
+
+func init() {
+	caddy.RegisterModule(&Handler{})
+	httpcaddyfile.RegisterHandlerDirective("ssh", parseCaddyfile)
+}
+
+// Handler implements an HTTP handler that proxies connections to a ssh server.
+type Handler struct {
+	// Optional secret path to restrict clients to.
+	Secret string `json:"secret,omitempty"`
+}
+
+// CaddyModule returns the Caddy module information.
+func (*Handler) CaddyModule() caddy.ModuleInfo {
+	return caddy.ModuleInfo{
+		ID:  "http.handlers.ssh",
+		New: func() caddy.Module { return new(Handler) },
+	}
+}
+
+func (m *Handler) acceptProxy(w http.ResponseWriter, r *http.Request) error {
+	rc := http.NewResponseController(w)
+	if err := rc.EnableFullDuplex(); err != nil {
+		return fmt.Errorf("ssh: must connect using HTTP/1.1: %w", err)
+	}
+	httpConn, buf, err := rc.Hijack()
+	if err != nil {
+		return fmt.Errorf("ssh: must connect using HTTP/1.1: %w", err)
+	}
+	defer httpConn.Close() // backup close
+	if err := buf.Flush(); err != nil {
+		return fmt.Errorf("ssh: unexpected flush error: %w", err)
+	}
+	sshConn, err := net.Dial("tcp", "127.0.0.1:22")
+	if err != nil {
+		return fmt.Errorf("ssh: %w", err)
+	}
+	defer sshConn.Close() // backup close
+
+	var eg errgroup.Group
+	eg.Add(2)
+
+	go func() {
+		defer eg.Done()
+		if buf.Reader.Buffered() > 0 {
+			if _, err := io.Copy(sshConn, buf.Reader); err != nil {
+				eg.Error(err)
+			}
+		}
+		if _, err := io.Copy(sshConn, httpConn); err != nil {
+			eg.Error(err)
+		}
+		// Signal peer that no more data is coming.
+		sshConn.CloseWrite()
+	}()
+	go func() {
+		defer eg.Done()
+		if _, err := io.Copy(httpConn, sshConn); err != nil {
+			eg.Error(err)
+		}
+		// Signal peer that no more data is coming.
+		httpConn.CloseWrite()
+	}()
+
+	return eg.Wait()
+}
+
+// ServeHTTP implements caddyhttp.MiddlewareHandler.
+func (m *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyhttp.Handler) error {
+	if r.URL.Path[1:] == m.Secret {
+		return m.acceptProxy(w, r)
+	}
+	if handler, ok := m.handler.Load().(*handler); ok {
+		handler.proxy.ServeHTTP(w, r)
+		return nil
+	}
+	return next.ServeHTTP(w, r)
+}
+
+// UnmarshalCaddyfile implements caddyfile.Unmarshaler.
+func (m *Handler) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
+	d.Next() // consume directive name
+
+	// require an argument
+	if !d.NextArg() {
+		return d.ArgErr()
+	}
+
+	// store the argument
+	m.Secret = d.Val()
+	return nil
+}
+
+// parseCaddyfile unmarshals tokens from h into a new Middleware.
+func parseCaddyfile(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error) {
+	var m Handler
+	err := m.UnmarshalCaddyfile(h.Dispenser)
+	return &m, err
+}
+
+// Interface guards
+var (
+	_ caddyhttp.MiddlewareHandler = (*Handler)(nil)
+	_ caddyfile.Unmarshaler       = (*Handler)(nil)
+)
