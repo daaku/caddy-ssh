@@ -1,0 +1,24 @@
+name: Go
+on: [push]
+permissions:
+  contents: write
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
+      with:
+        go-version: stable
+        cache-dependency-path: go.mod
+    - run: go build ./...
+    - run: go test ./...
+    - run: go build ./cmd/caddy-ssh
+    - uses: svenstaro/upload-release-action@v2
+      with:
+        overwrite: true
+        repo_token: ${{ secrets.GITHUB_TOKEN }}
+        file: ${{ github.event.repository.name }}
+        asset_name: ${{ github.event.repository.name }}
+        tag: r${{ github.run_number }}
