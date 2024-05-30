@@ -1,11 +1,13 @@
 package ssh
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"sync"
+	"syscall"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
@@ -45,6 +47,19 @@ func closeRead(c net.Conn) error {
 		return cw.CloseRead()
 	}
 	return nil
+}
+
+func shouldLog(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, net.ErrClosed) {
+		return false
+	}
+	if errors.Is(err, syscall.ENOTCONN) {
+		return false
+	}
+	return true
 }
 
 func (h *Handler) ssh(w http.ResponseWriter, _ *http.Request) error {
@@ -128,11 +143,23 @@ func (h *Handler) ssh(w http.ResponseWriter, _ *http.Request) error {
 	}()
 
 	if err := eg.Wait(); err != nil {
-		return err
+		if shouldLog(err) {
+			return err
+		}
+		return nil
 	}
+
 	closeOnce.Do(close)
+
 	// we wait twice because close may also write an error to the errgroup
-	return eg.Wait()
+	if err := eg.Wait(); err != nil {
+		if shouldLog(err) {
+			return err
+		}
+		return nil
+	}
+
+	return nil
 }
 
 // ServeHTTP implements caddyhttp.MiddlewareHandler.
