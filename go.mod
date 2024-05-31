@@ -3,7 +3,7 @@ module github.com/daaku/caddy-ssh
 go 1.22.3
 
 require (
-	github.com/caddyserver/caddy/v2 v2.8.0
+	github.com/caddyserver/caddy/v2 v2.8.1
 	github.com/daaku/errgroup v0.1.0
 )
 
