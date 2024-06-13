@@ -34,101 +34,72 @@ func (*Handler) CaddyModule() caddy.ModuleInfo {
 	}
 }
 
-func closeWrite(c net.Conn) error {
-	if cw, ok := c.(interface{ CloseWrite() error }); ok {
-		return cw.CloseWrite()
-	}
-	return nil
+type writer struct {
+	rc *http.ResponseController
+	w  http.ResponseWriter
 }
 
-func closeRead(c net.Conn) error {
-	if cw, ok := c.(interface{ CloseRead() error }); ok {
-		return cw.CloseRead()
+func newWriter(w http.ResponseWriter) *writer {
+	return &writer{
+		rc: http.NewResponseController(w),
+		w:  w,
 	}
-	return nil
 }
 
-func shouldLog(err error) bool {
+func (w *writer) Write(p []byte) (int, error) {
+	n, err := w.w.Write(p)
 	if err == nil {
-		return false
+		err = w.rc.Flush()
 	}
-	if errors.Is(err, net.ErrClosed) {
-		return false
-	}
-	if errors.Is(err, syscall.ENOTCONN) {
-		return false
-	}
-	return true
+	return n, err
 }
 
-func (h *Handler) ssh(w http.ResponseWriter, _ *http.Request) error {
-	rc := http.NewResponseController(w)
-	if err := rc.EnableFullDuplex(); err != nil {
-		return fmt.Errorf("ssh: must connect using HTTP/1.1: %w", err)
+func (h *Handler) ssh(w http.ResponseWriter, r *http.Request) error {
+	if !r.ProtoAtLeast(2, 0) {
+		return errors.New("ssh: must connect using HTTP/2 or higher")
 	}
-	httpConn, buf, err := rc.Hijack()
-	if err != nil {
-		return fmt.Errorf("ssh: must connect using HTTP/1.1: %w", err)
-	}
-	defer httpConn.Close() // backup close
-	if err := buf.Flush(); err != nil {
-		return fmt.Errorf("ssh: unexpected flush error: %w", err)
-	}
+	wr := newWriter(w)
 	addr := h.Addr
 	if addr == "" {
 		addr = "127.0.0.1:22"
 	}
-	sshConn, err := net.Dial("tcp", addr)
+	sshConnC, err := net.Dial("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("ssh: %w", err)
 	}
+	sshConn := sshConnC.(*net.TCPConn)
 	defer sshConn.Close() // backup close
-	close := func() {
-		httpConn.Close()
-		sshConn.Close()
-	}
 
 	var eg errgroup.Group
 	eg.Go(func() error {
-		if buf.Reader.Buffered() > 0 {
-			if _, err := io.Copy(sshConn, buf.Reader); err != nil {
-				close()
-				return fmt.Errorf("ssh: copying buffered data to ssh from http: %w", err)
-			}
-		}
-		if _, err := io.Copy(sshConn, httpConn); err != nil {
-			close()
+		if _, err := io.Copy(sshConn, r.Body); err != nil {
+			sshConn.Close()
 			return fmt.Errorf("ssh: copying data to ssh from http: %w", err)
 		}
-		if err := closeWrite(sshConn); err != nil {
-			close()
+		if err := sshConn.CloseWrite(); err != nil {
+			sshConn.Close()
 			return fmt.Errorf("ssh: CloseWrite of ssh: %w", err)
-		}
-		if err := closeRead(httpConn); err != nil {
-			close()
-			return fmt.Errorf("ssh: CloseRead of http: %w", err)
 		}
 		return nil
 	})
 	eg.Go(func() error {
-		if _, err := io.Copy(httpConn, sshConn); err != nil {
-			close()
+		if _, err := io.Copy(wr, sshConn); err != nil {
+			sshConn.Close()
 			return fmt.Errorf("ssh: copying data to http from ssh: %w", err)
 		}
-		if err := closeWrite(httpConn); err != nil {
-			close()
-			return fmt.Errorf("ssh: CloseWrite of http: %w", err)
-		}
-		if err := closeRead(sshConn); err != nil {
-			close()
+		if err := sshConn.CloseRead(); err != nil {
+			sshConn.Close()
 			return fmt.Errorf("ssh: CloseRead of ssh: %w", err)
 		}
 		return nil
 	})
-	if err := eg.Wait(); shouldLog(err) {
-		return err
+	err = eg.Wait()
+	if err == nil ||
+		errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, syscall.ENOTCONN) {
+		return nil
 	}
-	return nil
+	return err
 }
 
 // ServeHTTP implements caddyhttp.MiddlewareHandler.
