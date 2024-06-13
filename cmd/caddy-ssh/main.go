@@ -12,9 +12,8 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
-
-	"github.com/daaku/errgroup"
 )
 
 func closeWrite(c net.Conn) error {
@@ -67,18 +66,21 @@ func run(ctx context.Context, insecure bool, url string) error {
 	if _, err := conn.Write(b.Bytes()); err != nil {
 		return err
 	}
-	var eg errgroup.Group
-	eg.Add(1)
+
+	var fErr atomic.Value
+	setErr := func(err error) {
+		fErr.CompareAndSwap(nil, err)
+	}
 
 	close := func() {
 		if err := conn.Close(); err != nil {
-			eg.Error(fmt.Errorf("caddy-ssh: closing http connection: %w", err))
+			setErr(fmt.Errorf("caddy-ssh: closing http connection: %w", err))
 		}
 		if err := os.Stdout.Close(); err != nil {
-			eg.Error(fmt.Errorf("caddy-ssh: closing stdout: %w", err))
+			setErr(fmt.Errorf("caddy-ssh: closing stdout: %w", err))
 		}
 		if err := os.Stdin.Close(); err != nil {
-			eg.Error(fmt.Errorf("caddy-ssh: closing stdin: %w", err))
+			setErr(fmt.Errorf("caddy-ssh: closing stdin: %w", err))
 		}
 	}
 	var closeOnce sync.Once
@@ -92,36 +94,29 @@ func run(ctx context.Context, insecure bool, url string) error {
 		// we don't wait for this goroutine because reading from stdin is not
 		// interruptable without shenanigans.
 		if _, err := io.Copy(conn, os.Stdin); err != nil {
-			eg.Error(fmt.Errorf("caddy-ssh: copying data to http from stdin: %w", err))
+			setErr(fmt.Errorf("caddy-ssh: copying data to http from stdin: %w", err))
 			closeOnce.Do(close)
 			return
 		}
 		if err := closeWrite(conn); err != nil {
-			eg.Error(fmt.Errorf("caddy-ssh: CloseWrite of http: %w", err))
-			closeOnce.Do(close)
-			return
-		}
-	}()
-	go func() {
-		defer eg.Done()
-		if _, err := io.Copy(os.Stdout, conn); err != nil {
-			eg.Error(fmt.Errorf("caddy-ssh: copying data to stdout from http: %w", err))
-			closeOnce.Do(close)
-			return
-		}
-		if err := closeRead(conn); err != nil {
-			eg.Error(fmt.Errorf("caddy-ssh: CloseRead of http: %w", err))
+			setErr(fmt.Errorf("caddy-ssh: CloseWrite of http: %w", err))
 			closeOnce.Do(close)
 			return
 		}
 	}()
 
-	if err := eg.Wait(); err != nil {
-		return err
+	if _, err := io.Copy(os.Stdout, conn); err != nil {
+		setErr(fmt.Errorf("caddy-ssh: copying data to stdout from http: %w", err))
+		closeOnce.Do(close)
 	}
+	if err := closeRead(conn); err != nil {
+		setErr(fmt.Errorf("caddy-ssh: CloseRead of http: %w", err))
+		closeOnce.Do(close)
+	}
+
 	closeOnce.Do(close)
-	// we wait twice because close may also write an error to the errgroup
-	return eg.Wait()
+	err, _ = fErr.Load().(error)
+	return err
 }
 
 func main() {
