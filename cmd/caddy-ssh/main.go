@@ -56,7 +56,7 @@ func run(ctx context.Context, insecure bool, url string) error {
 	if err != nil {
 		return fmt.Errorf("clientproxy: DialAndServe: %w", err)
 	}
-	defer conn.Close() // defensive close, ServeConn will handle this for us
+	defer conn.Close() // defensive close
 	var b bytes.Buffer
 	b.WriteString("GET ")
 	b.WriteString(u.RequestURI())
