@@ -32,12 +32,6 @@ func closeRead(c net.Conn) error {
 }
 
 func run(ctx context.Context, insecure bool, url string) error {
-	ctx, cancel := context.WithCancel(ctx)
-
-	// this will ensure our background goroutine below will be released if our
-	// connection fails for reasons besides a context cancelation.
-	defer cancel()
-
 	u, err := urlp.Parse(url)
 	if err != nil {
 		return err
@@ -74,7 +68,7 @@ func run(ctx context.Context, insecure bool, url string) error {
 		return err
 	}
 	var eg errgroup.Group
-	eg.Add(2)
+	eg.Add(1)
 
 	close := func() {
 		if err := conn.Close(); err != nil {
@@ -90,16 +84,13 @@ func run(ctx context.Context, insecure bool, url string) error {
 	var closeOnce sync.Once
 
 	// close everything if the context is canceled, like a SIGTERM
-	go func() {
-		defer eg.Done()
-		<-ctx.Done()
+	context.AfterFunc(ctx, func() {
 		closeOnce.Do(close)
-	}()
+	})
 
 	go func() {
 		// we don't wait for this goroutine because reading from stdin is not
 		// interruptable without shenanigans.
-		// defer eg.Done()
 		if _, err := io.Copy(conn, os.Stdin); err != nil {
 			eg.Error(fmt.Errorf("caddy-ssh: copying data to http from stdin: %w", err))
 			closeOnce.Do(close)
