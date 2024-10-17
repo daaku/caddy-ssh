@@ -4,7 +4,7 @@ go 1.22.4
 
 require (
 	github.com/caddyserver/caddy/v2 v2.8.4
-	github.com/daaku/http2nc v0.0.0-20240617182529-081defde4f22
+	github.com/daaku/http2nc v0.1.0
 	golang.org/x/net v0.30.0
 )
 
