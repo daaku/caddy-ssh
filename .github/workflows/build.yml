@@ -4,8 +4,21 @@ permissions:
   contents: write
 jobs:
   build:
-    name: Build
-    runs-on: ubuntu-latest
+    name: Build for ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            artifact_name: ${{ github.event.repository.name }}
+            asset_name: ${{ github.event.repository.name }}-x86_64-linux
+          - os: macos-latest
+            artifact_name: ${{ github.event.repository.name }}
+            asset_name: ${{ github.event.repository.name }}-arm64-apple-darwin
+          - os: windows-latest
+            artifact_name: ${{ github.event.repository.name }}.exe
+            asset_name: ${{ github.event.repository.name }}-x86_64-windows.exe
     steps:
     - uses: actions/checkout@v4
     - uses: actions/setup-go@v5
@@ -14,11 +27,11 @@ jobs:
         cache-dependency-path: go.mod
     - run: go build ./...
     - run: go test ./...
-    - run: go build ./cmd/caddy-ssh
+    - run: go build -trimpath ./cmd/caddy-ssh
     - uses: svenstaro/upload-release-action@v2
       with:
         overwrite: true
         repo_token: ${{ secrets.GITHUB_TOKEN }}
-        file: ${{ github.event.repository.name }}
-        asset_name: ${{ github.event.repository.name }}
+        file: ${{ matrix.artifact_name }}
+        asset_name: ${{ matrix.asset_name }}
         tag: r${{ github.run_number }}
