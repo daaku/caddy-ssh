@@ -7,7 +7,7 @@ toolchain go1.24.1
 require (
 	github.com/caddyserver/caddy/v2 v2.9.1
 	github.com/daaku/http2nc v0.1.2
-	golang.org/x/net v0.37.0
+	golang.org/x/net v0.38.0
 )
 
 require (
