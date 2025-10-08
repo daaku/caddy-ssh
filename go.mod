@@ -5,7 +5,7 @@ go 1.25
 require (
 	github.com/caddyserver/caddy/v2 v2.10.2
 	github.com/daaku/http2nc v0.1.2
-	golang.org/x/net v0.44.0
+	golang.org/x/net v0.45.0
 )
 
 require (
