@@ -20,7 +20,7 @@ jobs:
             artifact_name: ${{ github.event.repository.name }}.exe
             asset_name: ${{ github.event.repository.name }}-x86_64-windows.exe
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
     - uses: actions/setup-go@v6
       with:
         go-version: stable
