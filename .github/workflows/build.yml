@@ -21,7 +21,7 @@ jobs:
             asset_name: ${{ github.event.repository.name }}-x86_64-windows.exe
     steps:
     - uses: actions/checkout@v7
-    - uses: actions/setup-go@v6
+    - uses: actions/setup-go@v7
       with:
         go-version: stable
         cache-dependency-path: go.mod
